@@ -12,35 +12,48 @@ export type TBrandColor = {
   accent: string;
 };
 
+export type TSkyColors = {
+  day: string;
+  sunset: string;
+  night: string;
+};
+
 export type TDefaultConfigurableData = {
   appName: string;
   logoUrl: string;
   brandColor: TBrandColor;
-  // Mirror new schema fields here. Example:
-  //   maxItemsPerPage?: number;
-  //   enableNotifications?: boolean;
-  //   featuredCategories?: string[];
+  tagline?: string;
+  playCtaLabel?: string;
+  controlsHint?: string;
+  versionTag?: string;
+  skyColors?: TSkyColors;
+  worldSeed?: number;
+  dayDurationMinutes?: number;
+  renderDistance?: number;
+  enableStarterItems?: boolean;
+  footerText?: string;
 };
 
 export const defaultConfigurablesData: TDefaultConfigurableData = {
-  appName: "FILL_APP_NAME_HERE",
-  logoUrl: "FILL_LOGO_URL_HERE",
+  appName: "VoxelVerse",
+  logoUrl: "https://api.iconify.design/lucide/box.svg?color=%23FFB347",
   brandColor: {
-    primary: "FILL_PRIMARY_COLOR_HERE",
-    secondary: "FILL_SECONDARY_COLOR_HERE",
-    accent: "FILL_ACCENT_COLOR_HERE",
+    primary: "#FFB347",
+    secondary: "#6BBF59",
+    accent: "#87CEEB",
   },
-  // ─────────────────────────────────────────────────────────────────────
-  // Add new field defaults here. See RULES.md §5 for per-type shape.
-  // Required branding fields → use the FILL_X_HERE placeholder pattern.
-  // Optional/typed defaults → real value with a "// fill it here" comment:
-  //
-  //   maxItemsPerPage: 12,                     // fill it here
-  //   enableNotifications: true,               // fill it here
-  //   featuredCategories: [],                  // fill it here
-  //   defaultLanguage: "en",                   // must match enum options
-  //   launchDate: "2025-01-01T00:00:00.000Z",  // ISO-8601
-  //   heroImage: "",                           // resolved URL after upload
-  //   galleryImages: [],                       // array of resolved URLs
-  // ─────────────────────────────────────────────────────────────────────
+  tagline: "Open a tab. Build a world.",
+  playCtaLabel: "Play",
+  controlsHint: "WASD to move • Mouse to look • E for inventory",
+  versionTag: "v0.1 MVP",
+  skyColors: {
+    day: "#87CEEB",
+    sunset: "#FF8C61",
+    night: "#0B1B3A",
+  },
+  worldSeed: 1337,
+  dayDurationMinutes: 10,
+  renderDistance: 3,
+  enableStarterItems: true,
+  footerText: "Cozy voxel sandbox, in your browser.",
 };

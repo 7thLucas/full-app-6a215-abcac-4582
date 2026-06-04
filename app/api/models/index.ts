@@ -33,6 +33,21 @@ async function discoverModelFiles(): Promise<string[]> {
     }
   }
 
+  // Also scan app/api/<feature>/ for in-tree feature models.
+  const apiPath = path.join(process.cwd(), "app", "api");
+  const apiEntries = await readdir(apiPath, { withFileTypes: true }).catch(() => []);
+  for (const entry of apiEntries) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name === "models" || entry.name === "seeds") continue;
+    const featurePath = path.join(apiPath, entry.name);
+    const files = await readdir(featurePath, { withFileTypes: true }).catch(() => []);
+    for (const file of files) {
+      if (file.isFile() && modelFilePattern.test(file.name)) {
+        modelFilesSet.add(path.join(featurePath, file.name));
+      }
+    }
+  }
+
   return [...modelFilesSet].sort();
 }
 
