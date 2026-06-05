@@ -4,6 +4,8 @@
 
 export type BlockId = number;
 
+export type BlockShape = "cube" | "stair" | "slab" | "halfblock";
+
 export interface BlockDefinition {
   id: BlockId;
   name: string;
@@ -19,6 +21,7 @@ export interface BlockDefinition {
   placeable: boolean; // can the player place it
   emissive?: number; // 0..1 light emission (torch etc.)
   liquid?: boolean;
+  shape?: BlockShape; // default "cube"; non-cube uses custom geometry hook
 }
 
 export const AIR: BlockId = 0;
@@ -36,6 +39,34 @@ export const GLASS: BlockId = 11;
 export const TORCH: BlockId = 12;
 export const CRAFTING_TABLE: BlockId = 13;
 export const FURNACE: BlockId = 14;
+// Ore blocks (Mission 2 — Crafting)
+export const IRON_ORE: BlockId = 15;
+export const COAL_ORE: BlockId = 16;
+// Item-only ids (cannot be placed in the world; inventory currency only).
+export const STICK: BlockId = 17;
+export const COAL: BlockId = 18;
+export const IRON_INGOT: BlockId = 19;
+// Tools (also items)
+export const WOOD_PICKAXE: BlockId = 20;
+export const STONE_PICKAXE: BlockId = 21;
+export const IRON_PICKAXE: BlockId = 22;
+export const WOOD_AXE: BlockId = 23;
+export const STONE_AXE: BlockId = 24;
+export const IRON_AXE: BlockId = 25;
+export const WOOD_SHOVEL: BlockId = 26;
+export const STONE_SHOVEL: BlockId = 27;
+export const IRON_SHOVEL: BlockId = 28;
+// Architecture variants (Mission 3) — 3 materials × {stair, slab, half-block}.
+// Each entry's `variant` and `material` are also encoded in `name` for fast lookup.
+export const STAIR_WOOD: BlockId = 29;
+export const STAIR_COBBLE: BlockId = 30;
+export const STAIR_STONE: BlockId = 31;
+export const SLAB_WOOD: BlockId = 32;
+export const SLAB_COBBLE: BlockId = 33;
+export const SLAB_STONE: BlockId = 34;
+export const HALFBLOCK_WOOD: BlockId = 35;
+export const HALFBLOCK_COBBLE: BlockId = 36;
+export const HALFBLOCK_STONE: BlockId = 37;
 
 export const BLOCKS: Record<BlockId, BlockDefinition> = {
   [AIR]: {
@@ -201,7 +232,195 @@ export const BLOCKS: Record<BlockId, BlockDefinition> = {
     drop: FURNACE,
     placeable: true,
   },
+  [IRON_ORE]: {
+    id: IRON_ORE,
+    name: "iron_ore",
+    label: "Iron Ore",
+    color: "#A09080",
+    hardness: 2.5,
+    solid: true,
+    drop: IRON_ORE, // raw block drop; ingot requires smelt
+    placeable: true,
+  },
+  [COAL_ORE]: {
+    id: COAL_ORE,
+    name: "coal_ore",
+    label: "Coal Ore",
+    color: "#3A3A3A",
+    hardness: 1.8,
+    solid: true,
+    drop: COAL,
+    placeable: true,
+  },
+  // Item-only entries (placeable=false; in-world rendering not used)
+  [STICK]: {
+    id: STICK,
+    name: "stick",
+    label: "Stick",
+    color: "#9C7B45",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [COAL]: {
+    id: COAL,
+    name: "coal",
+    label: "Coal",
+    color: "#222222",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [IRON_INGOT]: {
+    id: IRON_INGOT,
+    name: "iron_ingot",
+    label: "Iron Ingot",
+    color: "#D4D4D4",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [WOOD_PICKAXE]: {
+    id: WOOD_PICKAXE,
+    name: "wood_pickaxe",
+    label: "Wood Pickaxe",
+    color: "#C09865",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [STONE_PICKAXE]: {
+    id: STONE_PICKAXE,
+    name: "stone_pickaxe",
+    label: "Stone Pickaxe",
+    color: "#888888",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [IRON_PICKAXE]: {
+    id: IRON_PICKAXE,
+    name: "iron_pickaxe",
+    label: "Iron Pickaxe",
+    color: "#D4D4D4",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [WOOD_AXE]: {
+    id: WOOD_AXE,
+    name: "wood_axe",
+    label: "Wood Axe",
+    color: "#C09865",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [STONE_AXE]: {
+    id: STONE_AXE,
+    name: "stone_axe",
+    label: "Stone Axe",
+    color: "#888888",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [IRON_AXE]: {
+    id: IRON_AXE,
+    name: "iron_axe",
+    label: "Iron Axe",
+    color: "#D4D4D4",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [WOOD_SHOVEL]: {
+    id: WOOD_SHOVEL,
+    name: "wood_shovel",
+    label: "Wood Shovel",
+    color: "#C09865",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [STONE_SHOVEL]: {
+    id: STONE_SHOVEL,
+    name: "stone_shovel",
+    label: "Stone Shovel",
+    color: "#888888",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  [IRON_SHOVEL]: {
+    id: IRON_SHOVEL,
+    name: "iron_shovel",
+    label: "Iron Shovel",
+    color: "#D4D4D4",
+    hardness: 0,
+    solid: false,
+    drop: null,
+    placeable: false,
+  },
+  // ===== Architecture variants =====
+  [STAIR_WOOD]: {
+    id: STAIR_WOOD, name: "stair_wood", label: "Wood Stair", color: "#C09865",
+    hardness: 0.8, solid: true, drop: STAIR_WOOD, placeable: true, shape: "stair",
+  },
+  [STAIR_COBBLE]: {
+    id: STAIR_COBBLE, name: "stair_cobble", label: "Cobble Stair", color: "#6F6F6F",
+    hardness: 1.5, solid: true, drop: STAIR_COBBLE, placeable: true, shape: "stair",
+  },
+  [STAIR_STONE]: {
+    id: STAIR_STONE, name: "stair_stone", label: "Stone Stair", color: "#8C8C8C",
+    hardness: 1.5, solid: true, drop: STAIR_STONE, placeable: true, shape: "stair",
+  },
+  [SLAB_WOOD]: {
+    id: SLAB_WOOD, name: "slab_wood", label: "Wood Slab", color: "#C09865",
+    hardness: 0.6, solid: true, drop: SLAB_WOOD, placeable: true, shape: "slab",
+  },
+  [SLAB_COBBLE]: {
+    id: SLAB_COBBLE, name: "slab_cobble", label: "Cobble Slab", color: "#6F6F6F",
+    hardness: 1.2, solid: true, drop: SLAB_COBBLE, placeable: true, shape: "slab",
+  },
+  [SLAB_STONE]: {
+    id: SLAB_STONE, name: "slab_stone", label: "Stone Slab", color: "#8C8C8C",
+    hardness: 1.2, solid: true, drop: SLAB_STONE, placeable: true, shape: "slab",
+  },
+  [HALFBLOCK_WOOD]: {
+    id: HALFBLOCK_WOOD, name: "halfblock_wood", label: "Wood Half-block", color: "#C09865",
+    hardness: 0.6, solid: true, drop: HALFBLOCK_WOOD, placeable: true, shape: "halfblock",
+  },
+  [HALFBLOCK_COBBLE]: {
+    id: HALFBLOCK_COBBLE, name: "halfblock_cobble", label: "Cobble Half-block", color: "#6F6F6F",
+    hardness: 1.2, solid: true, drop: HALFBLOCK_COBBLE, placeable: true, shape: "halfblock",
+  },
+  [HALFBLOCK_STONE]: {
+    id: HALFBLOCK_STONE, name: "halfblock_stone", label: "Stone Half-block", color: "#8C8C8C",
+    hardness: 1.2, solid: true, drop: HALFBLOCK_STONE, placeable: true, shape: "halfblock",
+  },
 };
+
+/** True if this block uses a custom (non-cube) sub-volume. */
+export function isNonCube(id: BlockId): boolean {
+  const def = BLOCKS[id];
+  return !!def && !!def.shape && def.shape !== "cube";
+}
+
+export function blockShape(id: BlockId): BlockShape {
+  return BLOCKS[id]?.shape ?? "cube";
+}
 
 export function isSolid(id: BlockId): boolean {
   return BLOCKS[id]?.solid ?? false;
@@ -229,6 +448,19 @@ export const PLACEABLE_BLOCKS: BlockId[] = [
   COBBLESTONE,
   GLASS,
   TORCH,
+];
+
+// Block types tagged as architecture variants (used by HUD, hotbar selectors).
+export const ARCHITECTURE_BLOCKS: BlockId[] = [
+  STAIR_WOOD,
+  STAIR_COBBLE,
+  STAIR_STONE,
+  SLAB_WOOD,
+  SLAB_COBBLE,
+  SLAB_STONE,
+  HALFBLOCK_WOOD,
+  HALFBLOCK_COBBLE,
+  HALFBLOCK_STONE,
 ];
 
 // Helper: get block face colors for mesh rendering.

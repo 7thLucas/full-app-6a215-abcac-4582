@@ -5,8 +5,10 @@
 import { createNoise2D } from "simplex-noise";
 import {
   AIR,
+  COAL_ORE,
   DIRT,
   GRASS,
+  IRON_ORE,
   LEAVES,
   SAND,
   SNOW,
@@ -104,6 +106,27 @@ export function createWorldGenerator(seed: number): WorldGenerator {
             block = WATER;
           }
           data[(lx * CHUNK_HEIGHT + y) * CHUNK_SIZE + lz] = block;
+        }
+
+        // Ore inlays — replace STONE with ores at the right Y range.
+        // Deterministic via hashSeed shifted per ore.
+        for (let y = 1; y < CHUNK_HEIGHT; y++) {
+          if (data[(lx * CHUNK_HEIGHT + y) * CHUNK_SIZE + lz] !== STONE) continue;
+          // Iron Y10..60
+          if (y >= 10 && y <= 60) {
+            const ri = hashSeed(seed + 31, wx, wz * 31 + y);
+            if (ri < 0.012) {
+              data[(lx * CHUNK_HEIGHT + y) * CHUNK_SIZE + lz] = IRON_ORE;
+              continue;
+            }
+          }
+          // Coal Y10..80 (capped at chunk height)
+          if (y >= 10 && y <= Math.min(80, CHUNK_HEIGHT - 1)) {
+            const rc = hashSeed(seed + 71, wx, wz * 31 + y);
+            if (rc < 0.02) {
+              data[(lx * CHUNK_HEIGHT + y) * CHUNK_SIZE + lz] = COAL_ORE;
+            }
+          }
         }
 
         // Beach sand if surface near sea level

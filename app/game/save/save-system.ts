@@ -3,6 +3,7 @@
 
 import type { InventorySlot } from "../state/game-store";
 import type { BlockModifications } from "../world/chunk-store";
+import type { BlockOrientation } from "../architecture/rotation-system";
 
 export interface SaveBlob {
   version: 1;
@@ -17,6 +18,8 @@ export interface SaveBlob {
   hotbarIndex: number;
   inventory: InventorySlot[];
   modifications: BlockModifications;
+  /** Sparse map of orientations for placed architecture/orientable blocks. */
+  orientations?: Record<string, BlockOrientation>;
   savedAt: number;
 }
 

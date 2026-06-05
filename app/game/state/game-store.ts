@@ -22,6 +22,9 @@ export interface GameStore {
   started: boolean;
   paused: boolean;
   inventoryOpen: boolean;
+  craftingOpen: boolean;
+  blueprintMode: boolean;
+  blueprintMenuOpen: boolean;
 
   // Survival
   hp: number;
@@ -42,6 +45,10 @@ export interface GameStore {
   inventory: InventorySlot[];
   hotbarIndex: number;
 
+  // Architecture — placement orientation persistent across placements.
+  placementFacing: 0 | 1 | 2 | 3;
+  placementFlip: boolean;
+
   // Toasts
   toasts: { id: number; text: string }[];
 
@@ -51,13 +58,19 @@ export interface GameStore {
   setPaused: (p: boolean) => void;
   toggleInventory: () => void;
   setInventoryOpen: (open: boolean) => void;
+  setCraftingOpen: (open: boolean) => void;
+  setBlueprintMode: (on: boolean) => void;
+  setBlueprintMenuOpen: (open: boolean) => void;
 
   setHotbarIndex: (i: number) => void;
   shiftHotbar: (delta: number) => void;
+  rotatePlacement: () => void;
+  togglePlacementFlip: () => void;
 
   addItem: (id: BlockId, count?: number) => boolean;
   removeFromSelected: (count?: number) => boolean;
   swapSlots: (a: number, b: number) => void;
+  setInventoryDirect: (slots: InventorySlot[]) => void;
 
   setTimeOfDay: (t: number) => void;
   setPlayerSnapshot: (pos: { x: number; y: number; z: number }, biome: string) => void;
@@ -79,6 +92,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   started: false,
   paused: false,
   inventoryOpen: false,
+  craftingOpen: false,
+  blueprintMode: false,
+  blueprintMenuOpen: false,
 
   hp: 100,
   hpMax: 100,
@@ -95,6 +111,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   inventory: emptySlots(),
   hotbarIndex: 0,
 
+  placementFacing: 0,
+  placementFlip: false,
+
   toasts: [],
 
   start: () => set({ started: true, paused: false }),
@@ -106,6 +125,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ inventoryOpen: next, paused: next });
   },
   setInventoryOpen: (open) => set({ inventoryOpen: open, paused: open }),
+  setCraftingOpen: (open) => set({ craftingOpen: open, paused: open }),
+  setBlueprintMode: (on) => set({ blueprintMode: on }),
+  setBlueprintMenuOpen: (open) => set({ blueprintMenuOpen: open, paused: open }),
+  setInventoryDirect: (slots) => set({ inventory: slots }),
 
   setHotbarIndex: (i) => {
     const clamped = ((i % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE;
@@ -115,11 +138,39 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const next = ((get().hotbarIndex + delta) % HOTBAR_SIZE + HOTBAR_SIZE) % HOTBAR_SIZE;
     set({ hotbarIndex: next });
   },
+  rotatePlacement: () => {
+    const next = (((get().placementFacing + 1) % 4) + 4) % 4 as 0 | 1 | 2 | 3;
+    set({ placementFacing: next });
+  },
+  togglePlacementFlip: () => set({ placementFlip: !get().placementFlip }),
 
   addItem: (id, count = 1) => {
     if (!id || count <= 0) return true;
     const inv = [...get().inventory];
     let remaining = count;
+    // Tool items don't stack — each instance occupies its own slot with
+    // its full durability as `count`. Detect tools by their numeric id range
+    // (kept simple to avoid a registry import cycle here).
+    const TOOL_MIN = 20;
+    const TOOL_MAX = 28;
+    const isTool = id >= TOOL_MIN && id <= TOOL_MAX;
+    // Durability table, mirrored from tool-registry.ts
+    const TOOL_DURABILITY: Record<number, number> = {
+      20: 60, 21: 150, 22: 300,
+      23: 60, 24: 150, 25: 300,
+      26: 60, 27: 150, 28: 300,
+    };
+    if (isTool) {
+      // Each crafted tool takes its own slot, count = durability.
+      for (let i = 0; i < inv.length && remaining > 0; i++) {
+        if (inv[i].count === 0) {
+          inv[i] = { id, count: TOOL_DURABILITY[id] ?? 1 };
+          remaining -= 1;
+        }
+      }
+      set({ inventory: inv });
+      return remaining === 0;
+    }
     // Merge into existing stacks
     for (let i = 0; i < inv.length && remaining > 0; i++) {
       if (inv[i].id === id && inv[i].count < STACK_MAX) {

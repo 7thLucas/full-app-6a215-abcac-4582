@@ -10,6 +10,10 @@ import { Toasts } from "./Toasts";
 import { Inventory } from "./Inventory";
 import { PauseMenu } from "./PauseMenu";
 import type { SaveBlob } from "../save/save-system";
+import { CraftingTableUI } from "../crafting/crafting-table-ui";
+import { BlueprintHud, BlueprintMenu } from "../architecture/blueprint-ui";
+import { PointerLockTooltip } from "./PointerLockTooltip";
+import { useState } from "react";
 
 export interface GameCanvasProps {
   seed: number;
@@ -28,6 +32,7 @@ export function GameCanvas(props: GameCanvasProps) {
   const sceneRef = useRef<VoxelScene | null>(null);
   const paused = useGameStore((s) => s.paused);
   const inventoryOpen = useGameStore((s) => s.inventoryOpen);
+  const [hasLockedOnce, setHasLockedOnce] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -52,6 +57,17 @@ export function GameCanvas(props: GameCanvasProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Track first successful pointer-lock acquire for onboarding tooltip.
+  useEffect(() => {
+    const onChange = () => {
+      if (document.pointerLockElement) {
+        setHasLockedOnce(true);
+      }
+    };
+    document.addEventListener("pointerlockchange", onChange);
+    return () => document.removeEventListener("pointerlockchange", onChange);
+  }, []);
+
   // Keyboard shortcuts (inventory + hotbar) handled at React layer.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -65,6 +81,14 @@ export function GameCanvas(props: GameCanvasProps) {
       } else if (e.code === "Escape") {
         if (store.inventoryOpen) {
           store.setInventoryOpen(false);
+        } else if (store.craftingOpen) {
+          store.setCraftingOpen(false);
+        } else if (store.blueprintMenuOpen) {
+          store.setBlueprintMenuOpen(false);
+        } else if (store.blueprintMode) {
+          store.setBlueprintMode(false);
+          sceneRef.current?.blueprintManager.reset();
+          store.pushToast("Blueprint mode OFF");
         } else {
           store.setPaused(true);
         }
@@ -73,6 +97,38 @@ export function GameCanvas(props: GameCanvasProps) {
         if (n >= 1 && n <= 9) {
           store.setHotbarIndex(n - 1);
         }
+      } else if (e.code === "KeyR") {
+        // Architecture: cycle placement orientation around Y.
+        // Shift+R toggles flip (slab top/bottom, stair upside-down).
+        if (e.shiftKey) {
+          store.togglePlacementFlip();
+        } else {
+          store.rotatePlacement();
+        }
+        store.pushToast(
+          `Rotation: ${["+Z", "+X", "-Z", "-X"][useGameStore.getState().placementFacing]}${
+            useGameStore.getState().placementFlip ? " (flipped)" : ""
+          }`,
+        );
+      } else if (e.code === "KeyB") {
+        // Toggle blueprint mode; if already on and a corner B exists,
+        // tapping B again opens the save/load menu.
+        if (store.blueprintMode) {
+          if (store.blueprintMenuOpen) {
+            store.setBlueprintMenuOpen(false);
+          } else {
+            store.setBlueprintMenuOpen(true);
+            sceneRef.current?.player.exitPointerLock();
+          }
+        } else {
+          store.setBlueprintMode(true);
+          store.pushToast("Blueprint mode ON");
+        }
+      } else if (e.code === "KeyZ" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        const ok = sceneRef.current?.undo() ?? false;
+        if (ok) store.pushToast("Undo");
+        else store.pushToast("Nothing to undo");
       }
     };
     const onWheel = (e: WheelEvent) => {
@@ -106,10 +162,28 @@ export function GameCanvas(props: GameCanvasProps) {
         style={{ position: "absolute", inset: 0 }}
       />
       {showCrosshair ? <Crosshair /> : null}
+      <PointerLockTooltip accentColor={props.accentColor} hasLockedOnce={hasLockedOnce} />
       <Hud />
       <Hotbar accentColor={props.accentColor} />
       <Toasts accentColor={props.accentColor} />
       <Inventory accentColor={props.accentColor} />
+      <CraftingTableUI accentColor={props.accentColor} />
+      <BlueprintHud accentColor={props.accentColor} />
+      <BlueprintMenu
+        accentColor={props.accentColor}
+        getSelectionBounds={() => sceneRef.current?.blueprintManager.selectionBounds() ?? null}
+        saveAs={(name) => {
+          const r = sceneRef.current?.blueprintManager.saveSelectionAs(name) ?? null;
+          if (r) useGameStore.getState().pushToast(`Saved "${name}"`);
+          return !!r;
+        }}
+        beginPaste={(name) => {
+          sceneRef.current?.blueprintManager.beginPaste(name);
+          useGameStore.getState().pushToast(`Paste pending: "${name}"`);
+        }}
+        cancelPaste={() => sceneRef.current?.blueprintManager.cancelPaste()}
+        hasPaste={() => !!sceneRef.current?.blueprintManager.pastePending}
+      />
       <PauseMenu
         visible={paused}
         accentColor={props.accentColor}

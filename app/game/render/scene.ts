@@ -7,16 +7,29 @@
 import * as THREE from "three";
 import { PlayerController } from "../player/player-controller";
 import { createChunkStore, type ChunkStore } from "../world/chunk-store";
-import { createWorldGenerator } from "../world/worldgen";
+import { createWorldGenerator, type WorldGenerator } from "../world/worldgen";
 import { meshChunk, type ChunkMeshSet } from "./chunk-mesher";
 import {
   AIR,
+  CRAFTING_TABLE,
   getDef,
   isSolid,
 } from "../blocks/block-registry";
-import { CHUNK_HEIGHT, CHUNK_SIZE, chunkKey, BIOMES, type Biome } from "../world/world-config";
+import { CHUNK_HEIGHT, CHUNK_SIZE, chunkKey, type Biome } from "../world/world-config";
 import { useGameStore } from "../state/game-store";
 import { saveWorld, type SaveBlob } from "../save/save-system";
+import { EntityManager } from "../entities/entity-manager";
+import { AmbientManager } from "../entities/ambient-manager";
+import { effectiveHardness, resolveDrop, consumeToolDurability } from "../tools/mining-speed-system";
+import { getTool } from "../tools/tool-registry";
+import {
+  setBlockOrientation,
+  clearBlockOrientation,
+  getBlockOrientation,
+  collectOrientations,
+  applyOrientations,
+} from "../architecture/rotation-system";
+import { BlueprintManager } from "../architecture/blueprint-manager";
 
 export interface SceneOptions {
   container: HTMLElement;
@@ -68,6 +81,18 @@ export class VoxelScene {
   private storeUpdateTimer = 0;
   private dayLengthSeconds: number;
 
+  private world: WorldGenerator;
+  private entityManager: EntityManager | null = null;
+  private ambientManager: AmbientManager | null = null;
+
+  public blueprintManager: BlueprintManager;
+  private blueprintHelperGroup: THREE.Group;
+  private blueprintSelectionBox: THREE.LineSegments | null = null;
+  private blueprintPasteGhost: THREE.LineSegments | null = null;
+
+  private lastPlacingEdge = false; // used to edge-trigger on right-click
+  private lastBreakingEdge = false;
+
   constructor(opts: SceneOptions) {
     this.opts = opts;
     this.container = opts.container;
@@ -91,9 +116,11 @@ export class VoxelScene {
     this.player = new PlayerController({ domElement: this.renderer.domElement });
 
     const world = createWorldGenerator(opts.seed);
+    this.world = world;
     this.chunkStore = createChunkStore(world);
     if (opts.initialSave) {
       this.chunkStore.applyModifications(opts.initialSave.modifications);
+      applyOrientations(opts.initialSave.orientations);
     }
     this.player.attach(this.chunkStore);
 
@@ -193,6 +220,33 @@ export class VoxelScene {
       if (!useGameStore.getState().inventoryOpen) {
         this.player.requestPointerLock();
       }
+    });
+
+    // Blueprint manager + helper group
+    this.blueprintManager = new BlueprintManager(this.chunkStore);
+    this.blueprintHelperGroup = new THREE.Group();
+    this.blueprintHelperGroup.name = "BlueprintHelpers";
+    this.scene.add(this.blueprintHelperGroup);
+
+    // Wildlife + ambient creatures
+    this.entityManager = new EntityManager({
+      scene: this.scene,
+      chunkStore: this.chunkStore,
+      getPlayerPos: () => this.player.position,
+      getBiomeAt: (x, z) => this.getBiomeAt(x, z),
+      isDaytime: () => {
+        const t = useGameStore.getState().timeOfDay;
+        // day = 0.2..0.8
+        return t > 0.2 && t < 0.8;
+      },
+      isInsideViewCone: (x, y, z) => this.isInsideViewCone(x, y, z),
+    });
+    this.ambientManager = new AmbientManager({
+      scene: this.scene,
+      chunkStore: this.chunkStore,
+      getPlayerPos: () => this.player.position,
+      getBiomeAt: (x, z) => this.getBiomeAt(x, z),
+      getTimeOfDay: () => useGameStore.getState().timeOfDay,
     });
   }
 
@@ -349,6 +403,100 @@ export class VoxelScene {
     }
   }
 
+  private handleBlueprintMode(): boolean {
+    const state = useGameStore.getState();
+    if (!state.blueprintMode) {
+      this.lastPlacingEdge = this.player.placingNow;
+      this.lastBreakingEdge = this.player.breakingNow;
+      this.updateBlueprintHelpers();
+      return false;
+    }
+    const hit = this.player.locked ? this.player.raycast() : null;
+    // Left-click edge → set corner A then B; right-click edge while paste pending → commit.
+    const breakingEdge = this.player.breakingNow && !this.lastBreakingEdge;
+    const placingEdge = this.player.placingNow && !this.lastPlacingEdge;
+    this.lastBreakingEdge = this.player.breakingNow;
+    this.lastPlacingEdge = this.player.placingNow;
+
+    if (this.blueprintManager.pastePending) {
+      // Paste mode: show ghost at hit; commit on right-click.
+      if (placingEdge && hit) {
+        // Anchor = block being looked at, offset by surface normal
+        const ax = hit.block.x + hit.normal.x;
+        const ay = hit.block.y + hit.normal.y;
+        const az = hit.block.z + hit.normal.z;
+        this.blueprintManager.commitPasteAt(ax, ay, az);
+        state.pushToast("Blueprint pasted");
+      }
+      if (breakingEdge) {
+        this.blueprintManager.cancelPaste();
+        state.pushToast("Paste cancelled");
+      }
+    } else {
+      // Selection mode
+      if (placingEdge && hit) {
+        if (!this.blueprintManager.cornerA) {
+          this.blueprintManager.setCornerA(hit.block.x, hit.block.y, hit.block.z);
+          state.pushToast("Corner A set");
+        } else if (!this.blueprintManager.cornerB) {
+          this.blueprintManager.setCornerB(hit.block.x, hit.block.y, hit.block.z);
+          state.pushToast("Corner B set — open menu to save");
+          // Surface a save prompt by opening the blueprint menu
+          state.setBlueprintMenuOpen(true);
+          this.player.exitPointerLock();
+        }
+      }
+      if (breakingEdge) {
+        // Clear current selection
+        this.blueprintManager.reset();
+        state.pushToast("Selection cleared");
+      }
+    }
+
+    this.updateBlueprintHelpers();
+    return true;
+  }
+
+  private updateBlueprintHelpers() {
+    // Clear group children
+    while (this.blueprintHelperGroup.children.length > 0) {
+      const c = this.blueprintHelperGroup.children.pop()!;
+      if ((c as THREE.LineSegments).geometry)
+        (c as THREE.LineSegments).geometry.dispose();
+    }
+    const bounds = this.blueprintManager.selectionBounds();
+    if (bounds) {
+      const w = bounds.max[0] - bounds.min[0] + 1;
+      const h = bounds.max[1] - bounds.min[1] + 1;
+      const d = bounds.max[2] - bounds.min[2] + 1;
+      const geom = new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d));
+      const mat = new THREE.LineBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.95 });
+      const seg = new THREE.LineSegments(geom, mat);
+      seg.position.set(
+        bounds.min[0] + w / 2,
+        bounds.min[1] + h / 2,
+        bounds.min[2] + d / 2,
+      );
+      this.blueprintHelperGroup.add(seg);
+    }
+    // Paste ghost
+    const bp = this.blueprintManager.pastePending;
+    if (bp) {
+      const hit = this.player.locked ? this.player.raycast() : null;
+      if (hit) {
+        const ax = hit.block.x + hit.normal.x;
+        const ay = hit.block.y + hit.normal.y;
+        const az = hit.block.z + hit.normal.z;
+        const [dx, dy, dz] = bp.dims;
+        const geom = new THREE.EdgesGeometry(new THREE.BoxGeometry(dx, dy, dz));
+        const mat = new THREE.LineBasicMaterial({ color: 0x66c5ff, transparent: true, opacity: 0.95 });
+        const seg = new THREE.LineSegments(geom, mat);
+        seg.position.set(ax + dx / 2, ay + dy / 2, az + dz / 2);
+        this.blueprintHelperGroup.add(seg);
+      }
+    }
+  }
+
   private handleInteractions(dt: number) {
     const state = useGameStore.getState();
     const hit = this.player.locked ? this.player.raycast() : null;
@@ -367,10 +515,23 @@ export class VoxelScene {
       this.placePreview.visible = false;
     }
 
+    // Entity attack — if breakingNow but no closer block hit AND an entity in front, scare it.
+    if (this.player.breakingNow && this.entityManager) {
+      const camPos = this.player.camera.position;
+      const fx = -Math.sin(this.player.yaw) * Math.cos(this.player.pitch);
+      const fy = Math.sin(this.player.pitch);
+      const fz = -Math.cos(this.player.yaw) * Math.cos(this.player.pitch);
+      const dir = new THREE.Vector3(fx, fy, fz);
+      // Only attack if hit was far or none
+      if (!hit || hit.distance > 1.5) {
+        this.entityManager.attackNearest(camPos, dir, 4);
+      }
+    }
+
     // BREAK
     if (this.player.breakingNow && hit) {
       const target = hit.block;
-      const def = getDef(this.chunkStore.getBlock(target.x, target.y, target.z));
+      const blockId = this.chunkStore.getBlock(target.x, target.y, target.z);
       const tgtKey = `${target.x},${target.y},${target.z}`;
       const cur = this.player.breakTarget;
       const curKey = cur ? `${cur.x},${cur.y},${cur.z}` : null;
@@ -379,16 +540,22 @@ export class VoxelScene {
         this.player.breakProgress = 0;
       }
       this.player.breakProgress += dt;
-      const hardness = Math.max(0.05, def.hardness);
+      const hardness = effectiveHardness(blockId);
       // Outline darkens as progress grows
       this.outlineMaterial.opacity = 0.6 + Math.min(0.4, this.player.breakProgress / hardness * 0.4);
       if (this.player.breakProgress >= hardness) {
-        const id = this.chunkStore.getBlock(target.x, target.y, target.z);
-        const dropDef = getDef(id);
+        const prevOrient = { ...getBlockOrientation(target.x, target.y, target.z) };
         this.chunkStore.setBlock(target.x, target.y, target.z, AIR);
-        if (dropDef.drop != null) {
-          state.addItem(dropDef.drop, 1);
-          state.pushToast(`+1 ${getDef(dropDef.drop).label}`);
+        clearBlockOrientation(target.x, target.y, target.z);
+        this.blueprintManager.recordBreak(target.x, target.y, target.z, blockId, prevOrient);
+        const drop = resolveDrop(blockId);
+        if (drop) {
+          state.addItem(drop.id, drop.count);
+          state.pushToast(`+${drop.count} ${getDef(drop.id).label}`);
+        }
+        // Tools take 1 durability per break
+        if (getTool(state.inventory[state.hotbarIndex]?.id ?? 0)) {
+          consumeToolDurability();
         }
         this.player.breakProgress = 0;
         this.player.breakTarget = null;
@@ -399,11 +566,24 @@ export class VoxelScene {
       this.outlineMaterial.opacity = 0.7;
     }
 
+    // Right-click on a Crafting Table opens the crafting UI (edge-triggered).
+    const placingEdge = this.player.placingNow && !this.lastPlacingEdge;
+    this.lastPlacingEdge = this.player.placingNow;
+    if (placingEdge && hit) {
+      const targetId = this.chunkStore.getBlock(hit.block.x, hit.block.y, hit.block.z);
+      if (targetId === CRAFTING_TABLE) {
+        state.setCraftingOpen(true);
+        this.player.exitPointerLock();
+        return;
+      }
+    }
+
     // PLACE — fire on edge (placingNow stays true while held, throttle to 0.18s)
     const now = performance.now();
     if (this.player.placingNow && hit && now - this.player.lastPlaceAt > 180) {
       const selected = state.inventory[state.hotbarIndex];
-      if (selected.id && selected.count > 0) {
+      const selectedDef = selected.id ? getDef(selected.id) : null;
+      if (selected.id && selected.count > 0 && selectedDef?.placeable) {
         const px = hit.block.x + hit.normal.x;
         const py = hit.block.y + hit.normal.y;
         const pz = hit.block.z + hit.normal.z;
@@ -422,6 +602,13 @@ export class VoxelScene {
           const existing = this.chunkStore.getBlock(px, py, pz);
           if (existing === AIR) {
             this.chunkStore.setBlock(px, py, pz, selected.id);
+            // Record orientation for orientable blocks (architecture variants).
+            setBlockOrientation(px, py, pz, {
+              facing: state.placementFacing,
+              flip: state.placementFlip,
+            });
+            // Push placement event for blueprint undo (Mission 3 task 2).
+            this.blueprintManager.recordPlace(px, py, pz, existing);
             state.removeFromSelected(1);
             this.player.lastPlaceAt = now;
           }
@@ -445,10 +632,23 @@ export class VoxelScene {
     );
   }
 
-  private getBiomeAt(_x: number, _z: number): Biome {
-    // Cheap-ish biome readout via worldgen.
-    // Kept as a function for future swap-out.
-    return (this.opts.seed % 5 === 0 ? BIOMES.PLAINS : BIOMES.PLAINS) as Biome;
+  private getBiomeAt(x: number, z: number): Biome {
+    return this.world.getBiomeAt(x, z);
+  }
+
+  /** Quick frustum-cone test used by spawn logic to avoid in-sight spawns. */
+  private isInsideViewCone(x: number, y: number, z: number): boolean {
+    const dx = x - this.player.position.x;
+    const dy = y - this.player.position.y;
+    const dz = z - this.player.position.z;
+    const dist = Math.hypot(dx, dy, dz);
+    if (dist < 6) return true; // too close
+    if (dist > 80) return false;
+    const fx = -Math.sin(this.player.yaw) * Math.cos(this.player.pitch);
+    const fy = Math.sin(this.player.pitch);
+    const fz = -Math.cos(this.player.yaw) * Math.cos(this.player.pitch);
+    const dot = (dx * fx + dy * fy + dz * fz) / (dist || 1);
+    return dot > 0.55; // inside ~55deg cone
   }
 
   private maybeAutosave(dt: number) {
@@ -456,6 +656,10 @@ export class VoxelScene {
     if (this.autosaveTimer < 25) return; // every 25s
     this.autosaveTimer = 0;
     this.saveNow();
+  }
+
+  undo(): boolean {
+    return this.blueprintManager.undo();
   }
 
   saveNow(): boolean {
@@ -473,6 +677,7 @@ export class VoxelScene {
       hotbarIndex: s.hotbarIndex,
       inventory: s.inventory.map((slot) => ({ id: slot.id, count: slot.count })),
       modifications: this.chunkStore.collectModifications(),
+      orientations: collectOrientations(),
       savedAt: Date.now(),
     };
     const ok = saveWorld(blob);
@@ -508,7 +713,13 @@ export class VoxelScene {
     // Player + interactions (still update so gravity settles even when paused).
     this.player.update(dt);
     if (!store.paused) {
-      this.handleInteractions(dt);
+      const inBlueprint = this.handleBlueprintMode();
+      if (!inBlueprint) {
+        this.handleInteractions(dt);
+      } else {
+        this.outline.visible = false;
+        this.placePreview.visible = false;
+      }
     } else {
       this.outline.visible = false;
       this.placePreview.visible = false;
@@ -517,6 +728,12 @@ export class VoxelScene {
     // Chunk loading & meshing
     this.updateChunks();
     this.rebuildDirtyChunks();
+
+    // Entities + ambient creatures (don't tick when paused)
+    if (!store.paused) {
+      this.entityManager?.update(dt);
+      this.ambientManager?.update(dt);
+    }
 
     // Sync store
     this.syncStore(dt);
@@ -533,6 +750,16 @@ export class VoxelScene {
 
   dispose() {
     this.stop();
+    this.entityManager?.dispose();
+    this.ambientManager?.dispose();
+    // Dispose blueprint helper geometries
+    while (this.blueprintHelperGroup.children.length > 0) {
+      const c = this.blueprintHelperGroup.children.pop() as THREE.LineSegments | undefined;
+      c?.geometry?.dispose();
+    }
+    this.scene.remove(this.blueprintHelperGroup);
+    void this.blueprintSelectionBox;
+    void this.blueprintPasteGhost;
     this.player.dispose();
     this.resizeObserver?.disconnect();
     for (const entry of this.chunkEntries.values()) {

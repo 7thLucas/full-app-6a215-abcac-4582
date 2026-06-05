@@ -8,11 +8,15 @@ import { CHUNK_HEIGHT, CHUNK_SIZE } from "../world/world-config";
 import {
   AIR,
   WATER,
+  blockShape,
   getDef,
   getFaceColor,
+  isNonCube,
   isTransparent,
   type BlockId,
 } from "../blocks/block-registry";
+import { getBlockOrientation, type BlockOrientation } from "../architecture/rotation-system";
+import { emitNonCubeGeometry } from "../architecture/non-cube-emitter";
 
 export interface MeshOutput {
   positions: Float32Array;
@@ -86,6 +90,7 @@ function visibleFor(
 ): FaceCell | null {
   // Render face on the side of `blockA` (the solid one) facing `blockB`.
   if (blockA === AIR) return null;
+  if (isNonCube(blockA)) return null; // handled separately
   if (blockA === WATER) {
     // Only render water surface top.
     if (!positive || faceKey !== "top") return null;
@@ -94,8 +99,9 @@ function visibleFor(
   }
   const aDef = getDef(blockA);
   if (!aDef.solid) return null;
-  // Visible when neighbor is air, water, or transparent different block.
-  if (blockB === AIR || blockB === WATER) {
+  // Visible when neighbor is air, water, transparent, or a NON-CUBE (which leaves
+  // most of the cell empty so cube faces touching it should render).
+  if (blockB === AIR || blockB === WATER || isNonCube(blockB)) {
     return { id: blockA, color: getFaceColor(blockA, faceKey) };
   }
   if (isTransparent(blockB) && blockB !== blockA) {
@@ -241,6 +247,21 @@ export function meshChunk(
             n++;
           }
         }
+      }
+    }
+  }
+
+  // Second pass — emit explicit geometry for non-cube blocks (stairs/slabs/halfblocks).
+  for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+    for (let ly = 0; ly < CHUNK_HEIGHT; ly++) {
+      for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        const id = blocks[(lx * CHUNK_HEIGHT + ly) * CHUNK_SIZE + lz] as BlockId;
+        if (!isNonCube(id)) continue;
+        const wx = baseX + lx;
+        const wy = ly;
+        const wz = baseZ + lz;
+        const orient: BlockOrientation = getBlockOrientation(wx, wy, wz);
+        emitNonCubeGeometry(opaque, blockShape(id), id, lx, ly, lz, orient);
       }
     }
   }
